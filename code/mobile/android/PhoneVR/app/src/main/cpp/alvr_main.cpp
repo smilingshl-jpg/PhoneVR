@@ -6,11 +6,14 @@
 #include <deque>
 #include <jni.h>
 #include <map>
+#include <mutex>
 #include <thread>
 #include <unistd.h>
 #include <vector>
 
 #include "nlohmann/json.hpp"
+#include "pose_math.h"
+#include "reprojection.h"
 #include "utils.h"
 
 using namespace nlohmann;
@@ -21,6 +24,8 @@ uint64_t HEAD_ID = alvr_path_string_to_id("/user/head");
 const uint64_t VSYNC_QUEUE_INTERVAL_NS = 50e6;
 const float FLOOR_HEIGHT = 1.5;
 const int MAXIMUM_TRACKING_FRAMES = 360;
+// Reprojection aims each frame at the head rotation expected when it reaches the screen (~1 refresh ahead).
+const uint64_t REPROJECTION_PREDICTION_NS = 16e6;
 
 struct NativeContext {
     JavaVM *javaVm = nullptr;
@@ -49,6 +54,16 @@ struct NativeContext {
     AlvrViewParams viewParams[2] = {};
     AlvrDeviceMotion deviceMotion = {};
 
+    // 6DoF fork: rotational reprojection
+    bool reprojectionEnabled = true;
+    Reprojector reprojector;
+    AlvrViewParams frameViewParams[2] = {};   // the poses the PC rendered the current frame for
+
+    // 6DoF fork: head angular velocity sent to the PC (it was always zero)
+    pvr6::Quat lastHeadOrientation = {};
+    uint64_t lastHeadTimestampNs = 0;
+    pvr6::Vec3 headAngularVelocity = {};
+
     NativeContext() {
         memset(&fovArr, 0, (sizeof(fovArr)) / sizeof(int));
         memset(&viewParams, 0, (sizeof(viewParams)) / sizeof(int));
@@ -66,6 +81,9 @@ int64_t GetBootTimeNano() {
 
 // Inverse unit quaternion
 AlvrQuat inverseQuat(AlvrQuat q) { return {-q.x, -q.y, -q.z, q.w}; }
+
+pvr6::Quat toPvr(AlvrQuat q) { return {q.x, q.y, q.z, q.w}; }
+pvr6::Fov toPvr(AlvrFov f) { return {f.left, f.right, f.up, f.down}; }
 
 void cross(float a[3], float b[3], float out[3]) {
     out[0] = a[1] * b[2] - a[2] * b[1];
@@ -105,12 +123,17 @@ AlvrFov getFov(CardboardEye eye) {
     return fov;
 }
 
+std::mutex headTrackerMutex;   // getPose is now called from the input thread AND the render thread
+
 AlvrPose getPose(uint64_t timestampNs) {
     AlvrPose pose = {};
 
     float pos[3];
     float q[4];
-    CardboardHeadTracker_getPose(CTX.headTracker, (int64_t) timestampNs, kLandscapeLeft, pos, q);
+    {
+        std::lock_guard<std::mutex> lock(headTrackerMutex);
+        CardboardHeadTracker_getPose(CTX.headTracker, (int64_t) timestampNs, kLandscapeLeft, pos, q);
+    }
 
     auto inverseOrientation = AlvrQuat{q[0], q[1], q[2], q[3]};
     pose.orientation = inverseQuat(inverseOrientation);
@@ -147,6 +170,21 @@ void inputThread() {
 
         auto targetTimestampNs = GetBootTimeNano() + alvr_get_head_prediction_offset_ns();
         updateViewConfigs(targetTimestampNs);
+
+        // Angular velocity (world frame) from consecutive predicted poses, lightly smoothed, so the PC
+        // side can extrapolate the head between packets instead of assuming it is still.
+        pvr6::Quat q = toPvr(CTX.deviceMotion.pose.orientation);
+        if (CTX.lastHeadTimestampNs && targetTimestampNs > CTX.lastHeadTimestampNs) {
+            float dt = float(targetTimestampNs - CTX.lastHeadTimestampNs) * 1e-9f;
+            pvr6::Vec3 w = pvr6::angularVelocity(CTX.lastHeadOrientation, q, dt);
+            CTX.headAngularVelocity = pvr6::add(pvr6::scale(CTX.headAngularVelocity, 0.5f),
+                                                pvr6::scale(w, 0.5f));
+        }
+        CTX.lastHeadOrientation = q;
+        CTX.lastHeadTimestampNs = targetTimestampNs;
+        CTX.deviceMotion.angular_velocity[0] = CTX.headAngularVelocity.x;
+        CTX.deviceMotion.angular_velocity[1] = CTX.headAngularVelocity.y;
+        CTX.deviceMotion.angular_velocity[2] = CTX.headAngularVelocity.z;
 
         alvr_send_tracking(
             targetTimestampNs, CTX.viewParams, &CTX.deviceMotion, 1, nullptr, nullptr);
@@ -238,6 +276,7 @@ Java_viritualisres_phonevr_ALVRActivity_surfaceCreatedNative(JNIEnv *, jobject) 
     alvr_initialize_opengl();
 
     CTX.glContextRecreated = true;
+    CTX.reprojector.abandon();
 }
 
 extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_setScreenResolutionNative(
@@ -456,6 +495,9 @@ extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_render
 
                 alvr_start_stream_opengl(render_config);
 
+                if (!CTX.reprojector.create(config.view_width, config.view_height))
+                    error("reprojection unavailable; showing frames as received");
+
                 info("ALVR Poll Event: ALVR_EVENT_STREAMING_STARTED, opengl stream started and "
                      "input "
                      "Thread started...");
@@ -469,6 +511,7 @@ extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_render
                 CTX.inputThread.join();
 
                 GL(glDeleteTextures(2, CTX.streamTextures));
+                CTX.reprojector.destroy();
                 info("ALVR Poll Event: ALVR_EVENT_STREAMING_STOPPED, Stream stopped deleted "
                      "textures.");
             }
@@ -485,8 +528,9 @@ extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_render
         if (CTX.streaming) {
             void *streamHardwareBuffer = nullptr;
 
-            AlvrViewParams dummyViewParams;
-            auto timestampNs = alvr_get_frame(&dummyViewParams, &streamHardwareBuffer);
+            // alvr_get_frame writes BOTH eyes' view params (c_api.rs); upstream passed a single struct here,
+            // so the right eye's params overwrote the stack. They are also exactly what reprojection needs.
+            auto timestampNs = alvr_get_frame(CTX.frameViewParams, &streamHardwareBuffer);
 
             if (timestampNs == -1) {
                 return;
@@ -499,6 +543,21 @@ extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_render
 
             viewsDescs[0].texture = CTX.streamTextures[0];
             viewsDescs[1].texture = CTX.streamTextures[1];
+
+            if (CTX.reprojectionEnabled && CTX.reprojector.ready()) {
+                // Re-aim each eye from the rotation the PC rendered for to the newest head rotation.
+                pvr6::Quat now =
+                    toPvr(getPose(GetBootTimeNano() + REPROJECTION_PREDICTION_NS).orientation);
+                for (int eye = 0; eye < 2; eye++) {
+                    pvr6::Quat rot = pvr6::reprojectionRotation(
+                        toPvr(CTX.frameViewParams[eye].pose.orientation), now);
+                    viewsDescs[eye].texture = CTX.reprojector.apply(eye,
+                                                                    CTX.streamTextures[eye],
+                                                                    rot,
+                                                                    toPvr(CTX.fovArr[eye]),
+                                                                    toPvr(CTX.frameViewParams[eye].fov));
+                }
+            }
         } else {
             AlvrPose pose = getPose(GetBootTimeNano() + VSYNC_QUEUE_INTERVAL_NS);
 
@@ -535,6 +594,12 @@ extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_render
                           std::string(e.what()))
                   .c_str());
     }
+}
+
+extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_setReprojectionNative(
+    JNIEnv *, jobject, jboolean enabled) {
+    CTX.reprojectionEnabled = enabled;
+    info("reprojection %s", enabled ? "on" : "off");
 }
 
 extern "C" JNIEXPORT void JNICALL

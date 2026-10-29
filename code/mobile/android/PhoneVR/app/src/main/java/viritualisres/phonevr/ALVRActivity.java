@@ -106,6 +106,8 @@ public class ALVRActivity extends AppCompatActivity
         Log.i(TAG, "Refresh rate: " + refreshRate);
 
         initializeNative(width, height, refreshRate);
+        setReprojectionNative(
+                getSharedPreferences("settings", MODE_PRIVATE).getBoolean("reprojection", true));
 
         setContentView(R.layout.activity_vr);
         glView = findViewById(R.id.surface_view);
@@ -217,6 +219,9 @@ public class ALVRActivity extends AppCompatActivity
         SharedPreferences prefs = getSharedPreferences("settings", MODE_PRIVATE);
         boolean isChecked = prefs.getBoolean("max_brightness", true);
         toggleBrightness.setChecked(isChecked);
+        popup.getMenu()
+                .findItem(R.id.reprojection_toggle)
+                .setChecked(prefs.getBoolean("reprojection", true));
 
         popup.setOnMenuItemClickListener(this);
         popup.show();
@@ -243,6 +248,14 @@ public class ALVRActivity extends AppCompatActivity
             SharedPreferences.Editor editor = getSharedPreferences("settings", MODE_PRIVATE).edit();
             editor.putBoolean("max_brightness", item.isChecked());
             editor.apply();
+            return true;
+        } else if (item.getItemId() == R.id.reprojection_toggle) {
+            item.setChecked(!item.isChecked());
+            getSharedPreferences("settings", MODE_PRIVATE)
+                    .edit()
+                    .putBoolean("reprojection", item.isChecked())
+                    .apply();
+            setReprojectionNative(item.isChecked());
             return true;
         }
         return false;
@@ -302,4 +315,6 @@ public class ALVRActivity extends AppCompatActivity
     private native void switchViewerNative();
 
     private native void sendBatteryLevel(float level, boolean plugged);
+
+    private native void setReprojectionNative(boolean enabled);
 }
