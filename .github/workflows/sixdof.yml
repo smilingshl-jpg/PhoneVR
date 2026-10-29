@@ -28,10 +28,11 @@ jobs:
           distribution: 'oracle'
           java-version: '17'
 
+      # ALVR v20.8.0 + its Cargo.lock are from May 2024: build with the Rust of that time
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-          toolchain: stable
+          toolchain: '1.78.0'
           override: true
 
       - uses: Swatinem/rust-cache@v2
@@ -43,12 +44,10 @@ jobs:
         with:
           build-root-directory: ${{ env.GRADLE_DIR }}
 
-      - name: Prepare deps (ALVR client core + Cardboard SDK)
+      - name: Prepare deps (pinned Rust tools + Cardboard SDK)
         run: |
           cd $GRADLE_DIR
-          bash prepare-alvr-deps.sh nogvr
-          # upstream runs `cargo update`; show whether it moved any ALVR dependency
-          git -C ALVR diff --stat -- Cargo.lock || true
+          bash prepare-sixdof-deps.sh
 
       - name: Format Java/Kotlin (spotless check runs before every build)
         run: |
