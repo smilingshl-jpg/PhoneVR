@@ -1,0 +1,78 @@
+name: PhoneVR 6DoF APK
+
+# Slim build for the 6DoF fork: only the noGvr debug APK (what the phone needs), not the Windows
+# PVR server or the legacy GVR flavour. Steps follow upstream build.yml's Build_APK job.
+
+on:
+  push:
+    branches: [ sixdof ]
+  workflow_dispatch:
+
+env:
+  GRADLE_DIR: code/mobile/android/PhoneVR
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'true'
+
+      - name: Version label
+        id: vars
+        run: echo "label=$(git rev-parse --short HEAD)-$(date +'%Y%m%d-%H%M')" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'oracle'
+          java-version: '17'
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          workspaces: ${{ env.GRADLE_DIR }}/ALVR/
+
+      - uses: gradle/gradle-build-action@v3
+        with:
+          build-root-directory: ${{ env.GRADLE_DIR }}
+
+      - name: Prepare deps (ALVR client core + Cardboard SDK)
+        run: |
+          cd $GRADLE_DIR
+          bash prepare-alvr-deps.sh nogvr
+          # upstream runs `cargo update`; show whether it moved any ALVR dependency
+          git -C ALVR diff --stat -- Cargo.lock || true
+
+      - name: Format Java/Kotlin (spotless check runs before every build)
+        run: |
+          cd $GRADLE_DIR
+          chmod +x ./gradlew
+          ./gradlew spotlessApply
+
+      - name: Native unit tests (pose maths)
+        run: |
+          cd $GRADLE_DIR/app/src/test/cpp
+          if [ -f run_tests.sh ]; then bash run_tests.sh; else echo "no native tests yet"; fi
+
+      - name: Build noGvr debug APK
+        run: |
+          cd $GRADLE_DIR
+          ./gradlew :app:assembleNoGvrDebug --warning-mode=all --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PhoneVR-6DoF-${{ steps.vars.outputs.label }}
+          path: ${{ env.GRADLE_DIR }}/app/build/outputs/apk/noGvr/debug/
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-files-${{ steps.vars.outputs.label }}
+          path: ${{ env.GRADLE_DIR }}/app/.cxx/

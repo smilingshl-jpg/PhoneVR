@@ -3,7 +3,7 @@ import com.android.build.gradle.internal.dsl.PackagingOptions
 apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
 apply plugin: 'com.android.application'
-apply plugin: 'com.google.gms.google-services'
+// PhoneVR 6DoF fork: Firebase analytics removed (not used by the code; tied to the original app id)
 apply from: '../versioning.gradle'
 apply plugin: "com.diffplug.spotless"
 
@@ -38,7 +38,7 @@ android {
     namespace 'viritualisres.phonevr'
     ndkVersion '25.2.9519653' // r25c
     defaultConfig {
-        applicationId "viritualisres.phonevr"
+        applicationId "viritualisres.phonevr.sixdof"   // 6DoF fork installs next to the official app
         minSdkVersion 24
         targetSdkVersion 33
         versionCode buildVersionCode()
@@ -178,8 +178,6 @@ dependencies {
     implementation "ch.acra:acra-mail:$acraVersion"
     implementation "ch.acra:acra-dialog:$acraVersion"
 
-    implementation platform('com.google.firebase:firebase-bom:26.0.0')
-    implementation 'com.google.firebase:firebase-analytics-ktx'
 }
 
 // The dependencies for NDK builds live inside the .aar files so they need to
