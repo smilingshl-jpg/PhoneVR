@@ -2,8 +2,11 @@
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
-#include <GLES2/gl2ext.h>
 #include <GLES3/gl3.h>
+
+// needs the GL types from gl3.h above (GL_TEXTURE_EXTERNAL_OES)
+#include <GLES2/gl2ext.h>
+
 #include <android/log.h>
 #include <chrono>
 #include <cmath>
