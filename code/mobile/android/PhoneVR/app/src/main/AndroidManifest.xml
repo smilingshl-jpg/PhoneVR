@@ -34,6 +34,9 @@
     <uses-feature
         android:name="android.hardware.camera"
         android:required="true" />
+    <uses-feature
+        android:name="android.hardware.camera.ar"
+        android:required="false" />
 
     <application
         android:name=".ErrorReporting"
@@ -45,6 +48,9 @@
         android:theme="@style/AppTheme"
         tools:replace="android:extractNativeLibs"
         android:extractNativeLibs="true">
+
+        <!-- 6DoF fork: ARCore is optional; without it the app runs in 3DoF as before -->
+        <meta-data android:name="com.google.ar.core" android:value="optional" />
 
         <activity
             android:name=".InitActivity"

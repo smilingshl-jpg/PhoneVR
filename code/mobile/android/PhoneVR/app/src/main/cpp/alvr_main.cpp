@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <vector>
 
+#include "arcore_tracker.h"
 #include "nlohmann/json.hpp"
 #include "pose_math.h"
 #include "reprojection.h"
@@ -63,6 +64,12 @@ struct NativeContext {
     pvr6::Quat lastHeadOrientation = {};
     uint64_t lastHeadTimestampNs = 0;
     pvr6::Vec3 headAngularVelocity = {};
+
+    // 6DoF fork: ARCore head position (milestone 3: tracked and logged, not sent yet)
+    ArcoreTracker arcore;
+    bool sixDofEnabled = true;
+    int displayRotation = 1;   // android.view.Surface rotation of the landscape screen
+    int displayWidth = 0, displayHeight = 0;
 
     NativeContext() {
         memset(&fovArr, 0, (sizeof(fovArr)) / sizeof(int));
@@ -202,6 +209,8 @@ extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *) {
 extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_initializeNative(
     JNIEnv *env, jobject obj, jint screenWidth, jint screenHeight, jfloat refreshRate) {
     CTX.javaContext = env->NewGlobalRef(obj);
+    CTX.displayWidth = screenWidth;
+    CTX.displayHeight = screenHeight;
 
     uint32_t viewWidth = std::max(screenWidth, screenHeight) / 2;
     uint32_t viewHeight = std::min(screenWidth, screenHeight);
@@ -233,6 +242,7 @@ extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_destro
     alvr_destroy_opengl();
     alvr_destroy();
 
+    CTX.arcore.destroy();
     CardboardHeadTracker_destroy(CTX.headTracker);
     CTX.headTracker = nullptr;
     CardboardLensDistortion_destroy(CTX.lensDistortion);
@@ -241,9 +251,15 @@ extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_destro
     CTX.distortionRenderer = nullptr;
 }
 
-extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_resumeNative(JNIEnv *,
+extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_resumeNative(JNIEnv *env,
                                                                                        jobject) {
     CardboardHeadTracker_resume(CTX.headTracker);
+
+    // Without ARCore (unsupported phone, no camera permission, still installing) the app stays 3DoF.
+    if (CTX.sixDofEnabled &&
+        !CTX.arcore.resume(
+            env, CTX.javaContext, CTX.displayRotation, CTX.displayWidth, CTX.displayHeight))
+        info("6DoF: ARCore not running, head position stays fixed");
 
     CTX.renderingParamsChanged = true;
 
@@ -268,6 +284,7 @@ extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_pauseN
         CTX.running = false;
     }
 
+    CTX.arcore.pause();   // also frees the camera (QR viewer scan, other apps)
     CardboardHeadTracker_pause(CTX.headTracker);
 }
 
@@ -600,6 +617,19 @@ extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_setRep
     JNIEnv *, jobject, jboolean enabled) {
     CTX.reprojectionEnabled = enabled;
     info("reprojection %s", enabled ? "on" : "off");
+}
+
+// Called from Java before resumeNative (and when the menu toggle changes).
+extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_setSixDofNative(
+    JNIEnv *env, jobject, jboolean enabled, jint displayRotation) {
+    CTX.sixDofEnabled = enabled;
+    CTX.displayRotation = displayRotation;
+    if (!CTX.running) return;   // resumeNative will start it
+    if (enabled)
+        CTX.arcore.resume(env, CTX.javaContext, displayRotation, CTX.displayWidth, CTX.displayHeight);
+    else
+        CTX.arcore.pause();
+    info("6DoF %s", enabled ? "on" : "off");
 }
 
 extern "C" JNIEXPORT void JNICALL

@@ -42,6 +42,7 @@ public class ALVRActivity extends AppCompatActivity
 
     // Permission request codes
     private static final int PERMISSIONS_REQUEST_CODE = 2;
+    private static final int CAMERA_REQUEST_CODE = 3;
 
     private GLSurfaceView glView;
 
@@ -165,9 +166,33 @@ public class ALVRActivity extends AppCompatActivity
             return;
         }
 
+        // 6DoF: ARCore needs the camera. Ask once; if refused the stream still works in 3DoF.
+        boolean sixDof = isSixDofOn();
+        if (sixDof && !isCameraEnabled() && !cameraAsked) {
+            cameraAsked = true;
+            ActivityCompat.requestPermissions(
+                    this, new String[] {Manifest.permission.CAMERA}, CAMERA_REQUEST_CODE);
+        }
+        setSixDofNative(sixDof && isCameraEnabled(), displayRotation());
+
         glView.onResume();
         resumeNative();
         bMonitor.startMonitoring(this);
+    }
+
+    private boolean cameraAsked = false;
+
+    private boolean isSixDofOn() {
+        return getSharedPreferences("settings", MODE_PRIVATE).getBoolean("sixdof", true);
+    }
+
+    private boolean isCameraEnabled() {
+        return ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private int displayRotation() {
+        return getWindowManager().getDefaultDisplay().getRotation();
     }
 
     @Override
@@ -222,6 +247,7 @@ public class ALVRActivity extends AppCompatActivity
         popup.getMenu()
                 .findItem(R.id.reprojection_toggle)
                 .setChecked(prefs.getBoolean("reprojection", true));
+        popup.getMenu().findItem(R.id.sixdof_toggle).setChecked(prefs.getBoolean("sixdof", true));
 
         popup.setOnMenuItemClickListener(this);
         popup.show();
@@ -257,6 +283,18 @@ public class ALVRActivity extends AppCompatActivity
                     .apply();
             setReprojectionNative(item.isChecked());
             return true;
+        } else if (item.getItemId() == R.id.sixdof_toggle) {
+            item.setChecked(!item.isChecked());
+            getSharedPreferences("settings", MODE_PRIVATE)
+                    .edit()
+                    .putBoolean("sixdof", item.isChecked())
+                    .apply();
+            if (item.isChecked() && !isCameraEnabled()) {
+                ActivityCompat.requestPermissions(
+                        this, new String[] {Manifest.permission.CAMERA}, CAMERA_REQUEST_CODE);
+            }
+            setSixDofNative(item.isChecked() && isCameraEnabled(), displayRotation());
+            return true;
         }
         return false;
     }
@@ -270,6 +308,13 @@ public class ALVRActivity extends AppCompatActivity
     public void onRequestPermissionsResult(
             int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == CAMERA_REQUEST_CODE) {
+            // Upstream checked storage for every answer and closed the app; the camera is optional.
+            if (!isCameraEnabled()) {
+                Toast.makeText(this, R.string.sixdof_needs_camera, Toast.LENGTH_LONG).show();
+            }
+            return;
+        }
         if (!isReadExternalStorageEnabled()) {
             Toast.makeText(this, R.string.read_storage_permission, Toast.LENGTH_LONG).show();
             if (!ActivityCompat.shouldShowRequestPermissionRationale(
@@ -317,4 +362,6 @@ public class ALVRActivity extends AppCompatActivity
     private native void sendBatteryLevel(float level, boolean plugged);
 
     private native void setReprojectionNative(boolean enabled);
+
+    private native void setSixDofNative(boolean enabled, int displayRotation);
 }
