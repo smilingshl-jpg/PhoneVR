@@ -64,7 +64,24 @@ jobs:
       - name: Build noGvr debug APK
         run: |
           cd $GRADLE_DIR
-          ./gradlew :app:assembleNoGvrDebug --warning-mode=all --stacktrace
+          set -o pipefail
+          ./gradlew :app:assembleNoGvrDebug --warning-mode=all --stacktrace 2>&1 | tee build.log
+
+      # Job logs need a GitHub login to read, annotations don't: surface the real errors there.
+      - name: Report build errors as annotations
+        if: failure()
+        run: |
+          cd $GRADLE_DIR
+          [ -f build.log ] || exit 0
+          grep -nE "error:|error\[|FAILED|What went wrong|Caused by|Could not|not found|undefined reference|cannot find" build.log \
+            | grep -v "warning:" | head -40 > errors.txt || true
+          grep -n -A12 "What went wrong" build.log | head -40 >> errors.txt || true
+          i=0
+          while IFS= read -r line && [ $i -lt 9 ]; do
+            echo "::error title=build::$(echo "$line" | cut -c1-900 | sed 's/%/%25/g')"
+            i=$((i+1))
+          done < errors.txt
+          echo "::error title=build-what-went-wrong::$(grep -A12 'What went wrong' build.log | head -14 | tr '\n' ' ' | cut -c1-2500 | sed 's/%/%25/g')"
 
       - uses: actions/upload-artifact@v4
         with:
