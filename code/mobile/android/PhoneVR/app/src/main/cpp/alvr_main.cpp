@@ -13,6 +13,7 @@
 
 #include "arcore_tracker.h"
 #include "nlohmann/json.hpp"
+#include "pose_fusion.h"
 #include "pose_math.h"
 #include "reprojection.h"
 #include "utils.h"
@@ -65,8 +66,10 @@ struct NativeContext {
     uint64_t lastHeadTimestampNs = 0;
     pvr6::Vec3 headAngularVelocity = {};
 
-    // 6DoF fork: ARCore head position (milestone 3: tracked and logged, not sent yet)
+    // 6DoF fork: ARCore head position, fused with Cardboard rotation (input thread only)
     ArcoreTracker arcore;
+    pvr6::HeadPositionFusion fusion;
+    int64_t lastArcoreTimestampNs = 0;
     bool sixDofEnabled = true;
     int displayRotation = 1;   // android.view.Surface rotation of the landscape screen
     int displayWidth = 0, displayHeight = 0;
@@ -108,12 +111,13 @@ void quatVecMultiply(AlvrQuat q, float v[3], float out[3]) {
     }
 }
 
-void offsetPosWithQuat(AlvrQuat q, float offset[3], float outPos[3]) {
+// floorHeight: upstream adds a constant eye height; in 6DoF the head position is already absolute (0).
+void offsetPosWithQuat(AlvrQuat q, float offset[3], float outPos[3], float floorHeight = FLOOR_HEIGHT) {
     float rotatedOffset[3];
     quatVecMultiply(q, offset, rotatedOffset);
 
     outPos[0] -= rotatedOffset[0];
-    outPos[1] -= rotatedOffset[1] - FLOOR_HEIGHT;
+    outPos[1] -= rotatedOffset[1] - floorHeight;
     outPos[2] -= rotatedOffset[2];
 }
 
@@ -148,24 +152,62 @@ AlvrPose getPose(uint64_t timestampNs) {
     return pose;
 }
 
+bool sixDofActive() {
+    return CTX.sixDofEnabled && CTX.arcore.running() && CTX.fusion.valid();
+}
+
+// Feed the newest ARCore sample (if any) into the fusion; input thread only.
+void feedArcore() {
+    if (!CTX.sixDofEnabled || !CTX.arcore.running()) return;
+    ArcoreSample s = CTX.arcore.latest();
+    if (s.timestampNs == CTX.lastArcoreTimestampNs) return;
+    CTX.lastArcoreTimestampNs = s.timestampNs;
+    pvr6::ArInput in;
+    in.timestampNs = s.timestampNs;
+    in.orientation = {s.orientation[0], s.orientation[1], s.orientation[2], s.orientation[3]};
+    in.position = {s.position[0], s.position[1], s.position[2]};
+    in.tracking = s.tracking;
+    in.floorKnown = s.floorKnown;
+    in.floorY = s.floorY;
+    // Cardboard's rotation at the moment the camera image was taken, for the heading alignment.
+    CTX.fusion.addSample(in, toPvr(getPose((uint64_t) s.timestampNs).orientation));
+}
+
 void updateViewConfigs(uint64_t targetTimestampNs = 0) {
     if (!targetTimestampNs)
         targetTimestampNs = GetBootTimeNano() + alvr_get_head_prediction_offset_ns();
 
     AlvrPose headPose = getPose(targetTimestampNs);
 
+    // 6DoF: rotation stays Cardboard's (fast, predicted); position comes from ARCore when it tracks.
+    bool sixDof = sixDofActive();
+    pvr6::Vec3 velocity = {};
+    if (sixDof) {
+        pvr6::Vec3 p = CTX.fusion.positionAt((int64_t) targetTimestampNs);
+        headPose.position[0] = p.x;
+        headPose.position[1] = p.y;
+        headPose.position[2] = p.z;
+        velocity = CTX.fusion.velocity();
+    }
+    float floorHeight = sixDof ? 0.0f : FLOOR_HEIGHT;
+
     CTX.deviceMotion.device_id = HEAD_ID;
     CTX.deviceMotion.pose = headPose;
+    CTX.deviceMotion.linear_velocity[0] = velocity.x;
+    CTX.deviceMotion.linear_velocity[1] = velocity.y;
+    CTX.deviceMotion.linear_velocity[2] = velocity.z;
 
     float headToEye[3] = {CTX.eyeOffsets[kLeft], 0.0, 0.0};
 
     CTX.viewParams[kLeft].pose = headPose;
-    offsetPosWithQuat(headPose.orientation, headToEye, CTX.viewParams[kLeft].pose.position);
+    offsetPosWithQuat(
+        headPose.orientation, headToEye, CTX.viewParams[kLeft].pose.position, floorHeight);
     CTX.viewParams[kLeft].fov = CTX.fovArr[kLeft];
 
     headToEye[0] = CTX.eyeOffsets[kRight];
     CTX.viewParams[kRight].pose = headPose;
-    offsetPosWithQuat(headPose.orientation, headToEye, CTX.viewParams[kRight].pose.position);
+    offsetPosWithQuat(
+        headPose.orientation, headToEye, CTX.viewParams[kRight].pose.position, floorHeight);
     CTX.viewParams[kRight].fov = CTX.fovArr[kRight];
 }
 
@@ -176,6 +218,7 @@ void inputThread() {
     while (CTX.streaming) {
 
         auto targetTimestampNs = GetBootTimeNano() + alvr_get_head_prediction_offset_ns();
+        feedArcore();
         updateViewConfigs(targetTimestampNs);
 
         // Angular velocity (world frame) from consecutive predicted poses, lightly smoothed, so the PC
