@@ -50,20 +50,26 @@ public class ALVRActivity extends AppCompatActivity
 
     public static class BatteryMonitor extends BroadcastReceiver {
         private final BatteryLevelListener listener;
+        // onResume can return early (permission prompt) and onPause still runs, so track this
+        private boolean registered = false;
 
         public BatteryMonitor(BatteryLevelListener listener) {
             this.listener = listener;
         }
 
         public void startMonitoring(Context context) {
+            if (registered) return;
             // Register BroadcastReceiver to monitor battery level changes
             IntentFilter filter = new IntentFilter(Intent.ACTION_BATTERY_CHANGED);
             context.registerReceiver(this, filter);
+            registered = true;
         }
 
         public void stopMonitoring(Context context) {
+            if (!registered) return;
             // Unregister the BroadcastReceiver
             context.unregisterReceiver(this);
+            registered = false;
         }
 
         @Override
