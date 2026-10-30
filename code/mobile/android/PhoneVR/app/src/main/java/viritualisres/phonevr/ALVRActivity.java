@@ -11,6 +11,7 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.opengl.GLSurfaceView;
 import android.os.BatteryManager;
+import android.os.Build;
 import android.os.Build.VERSION;
 import android.os.Build.VERSION_CODES;
 import android.os.Bundle;
@@ -113,6 +114,7 @@ public class ALVRActivity extends AppCompatActivity
         Log.i(TAG, "Refresh rate: " + refreshRate);
 
         initializeNative(width, height, refreshRate);
+        setPhoneModelNative(Build.MODEL);
         setReprojectionNative(
                 getSharedPreferences("settings", MODE_PRIVATE).getBoolean("reprojection", true));
 
@@ -370,4 +372,6 @@ public class ALVRActivity extends AppCompatActivity
     private native void setReprojectionNative(boolean enabled);
 
     private native void setSixDofNative(boolean enabled, int displayRotation);
+
+    private native void setPhoneModelNative(String model);
 }

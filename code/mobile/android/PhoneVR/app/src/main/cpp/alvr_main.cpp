@@ -183,7 +183,8 @@ void updateViewConfigs(uint64_t targetTimestampNs = 0) {
     bool sixDof = sixDofActive();
     pvr6::Vec3 velocity = {};
     if (sixDof) {
-        pvr6::Vec3 p = CTX.fusion.positionAt((int64_t) targetTimestampNs);
+        // the eyes swing around the neck with Cardboard's predicted rotation; ARCore moves the neck
+        pvr6::Vec3 p = CTX.fusion.positionAt((int64_t) targetTimestampNs, toPvr(headPose.orientation));
         headPose.position[0] = p.x;
         headPose.position[1] = p.y;
         headPose.position[2] = p.z;
@@ -673,6 +674,18 @@ extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_setSix
     else
         CTX.arcore.pause();
     info("6DoF %s", enabled ? "on" : "off");
+}
+
+// Where this phone's rear camera sits relative to the eyes (presets for phones we know).
+extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_setPhoneModelNative(
+    JNIEnv *env, jobject, jstring model) {
+    const char *m = env->GetStringUTFChars(model, nullptr);
+    pvr6::FusionConfig cfg = CTX.fusion.config();
+    cfg.cameraToEyes = pvr6::cameraOffsetFor(m);
+    CTX.fusion.setConfig(cfg);
+    info("phone %s: camera to eyes %.3f %.3f %.3f", m, cfg.cameraToEyes.x, cfg.cameraToEyes.y,
+         cfg.cameraToEyes.z);
+    env->ReleaseStringUTFChars(model, m);
 }
 
 extern "C" JNIEXPORT void JNICALL
