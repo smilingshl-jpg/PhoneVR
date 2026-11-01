@@ -34,6 +34,7 @@ class HandSender {
     sockaddr_in peer_{};
     int64_t lastHelloNs_ = 0;
     int64_t lastSendNs_ = 0;
+    int64_t lastCheckNs_ = 0;
     int64_t rateStartNs_ = 0;
     uint32_t seq_ = 0;
     int checks_ = 0;

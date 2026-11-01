@@ -73,7 +73,7 @@ void HandSender::loop() {
             lastHelloNs_ = now;
         }
         // Keeps the page honest when no pictures are being checked at all.
-        if (now - lastSendNs_ > kSecondNs) {
+        if (now - lastSendNs_ > kSecondNs && now - lastCheckNs_ > kSecondNs) {
             checks_ = 0;
             rate_ = 0;
             send(0, nullptr, 0);
@@ -94,6 +94,7 @@ void HandSender::report(float pictureAgeMs, float msPerCheck, const pvr6::HandPo
     std::lock_guard<std::mutex> lock(mutex_);
     msPerCheck_ = msPerCheck_ == 0 ? msPerCheck : 0.9f * msPerCheck_ + 0.1f * msPerCheck;
     checks_++;
+    lastCheckNs_ = now;
     if (rateStartNs_ == 0) rateStartNs_ = now;
     if (now - rateStartNs_ >= kSecondNs) {
         rate_ = checks_ * float(kSecondNs) / float(now - rateStartNs_);
