@@ -388,9 +388,6 @@ void ArcoreTracker::loop(JavaVM *vm) {
             ArCamera_getTrackingFailureReason(session_, camera, &reason);
             s.failureReason = reason;
         }
-        offerHandPicture(env, camera, ts);
-        ArCamera_release(camera);
-
         if (s.tracking && planeFindingOn_ && ts - lastFloorCheckNs_ > 500000000LL) {
             lastFloorCheckNs_ = ts;
             findFloor(s);
@@ -403,6 +400,8 @@ void ArcoreTracker::loop(JavaVM *vm) {
             statsStart = now;
         }
         publish(s);
+        offerHandPicture(env, camera, ts);    // after publish: a head position never waits for a picture
+        ArCamera_release(camera);
 
         if (now - lastLog > 5000000000LL) {   // M3: log only, position not used yet
             lastLog = now;

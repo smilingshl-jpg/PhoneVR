@@ -65,26 +65,36 @@ final class HandTracker {
     }
 
     private void load() {
+        // GPU first: on the CPU the model made head tracking and the picture visibly jitter
         try {
-            // CPU, because the graphics chip is busy showing the stream
-            BaseOptions base =
-                    BaseOptions.builder().setModelAssetPath(MODEL).setDelegate(Delegate.CPU).build();
-            landmarker =
-                    HandLandmarker.createFromOptions(
-                            context,
-                            HandLandmarker.HandLandmarkerOptions.builder()
-                                    .setBaseOptions(base)
-                                    .setRunningMode(RunningMode.VIDEO)
-                                    .setNumHands(MAX_HANDS)
-                                    .setMinHandDetectionConfidence(MIN_CONFIDENCE)
-                                    .setMinHandPresenceConfidence(MIN_CONFIDENCE)
-                                    .setMinTrackingConfidence(MIN_CONFIDENCE)
-                                    .build());
-            Log.i(TAG, "hands: model ready");
+            landmarker = create(Delegate.GPU);
+            Log.i(TAG, "hands: model ready on the GPU");
+            return;
+        } catch (RuntimeException e) {
+            Log.w(TAG, "hands: GPU not available, using the CPU", e);
+        }
+        try {
+            landmarker = create(Delegate.CPU);
+            Log.i(TAG, "hands: model ready on the CPU");
         } catch (RuntimeException e) {
             Log.e(TAG, "hands: model failed to load", e);
             problemNative("The phone couldn't load the hand model: " + e.getMessage());
         }
+    }
+
+    private HandLandmarker create(Delegate delegate) {
+        BaseOptions base =
+                BaseOptions.builder().setModelAssetPath(MODEL).setDelegate(delegate).build();
+        return HandLandmarker.createFromOptions(
+                context,
+                HandLandmarker.HandLandmarkerOptions.builder()
+                        .setBaseOptions(base)
+                        .setRunningMode(RunningMode.VIDEO)
+                        .setNumHands(MAX_HANDS)
+                        .setMinHandDetectionConfidence(MIN_CONFIDENCE)
+                        .setMinHandPresenceConfidence(MIN_CONFIDENCE)
+                        .setMinTrackingConfidence(MIN_CONFIDENCE)
+                        .build());
     }
 
     // From native code, on ARCore's thread. `rgba` isn't touched again until resultNative.

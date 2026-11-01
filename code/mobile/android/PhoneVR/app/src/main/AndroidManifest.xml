@@ -51,6 +51,8 @@
 
         <!-- 6DoF fork: ARCore is optional; without it the app runs in 3DoF as before -->
         <meta-data android:name="com.google.ar.core" android:value="optional" />
+        <!-- Lets the hand model use the GPU's OpenCL driver when the phone has one -->
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
 
         <activity
             android:name=".InitActivity"
