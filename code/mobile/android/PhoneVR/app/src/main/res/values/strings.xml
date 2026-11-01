@@ -45,5 +45,7 @@
     <string name="reprojection">Reprojection (smoother)</string>
     <string name="sixdof">6DoF head tracking (ARCore)</string>
     <string name="hand_tracking">Hand tracking (for OneTrack)</string>
+    <string name="recenter">Recenter the game here</string>
+    <string name="recenter_soon">Recentering in 5 seconds: put the headset on and face forward</string>
     <string name="sixdof_needs_camera">6DoF head tracking needs the camera. Staying in 3DoF (look around only).</string>
 </resources>

@@ -15,8 +15,10 @@ namespace {
 
 constexpr int kPort = 47932;
 constexpr char kHello[] = "onetrack-hello";
+constexpr char kRecenter[] = "onetrack-recenter";
 constexpr int64_t kSecondNs = 1000000000LL;
 constexpr int64_t kHelloGoneNs = 5 * kSecondNs;
+constexpr int64_t kRecenterGapNs = kSecondNs;   // OneTrack sends it a few times, in case Wi-Fi loses one
 
 int64_t bootTimeNs() {
     timespec t{};
@@ -71,6 +73,11 @@ void HandSender::loop() {
             }
             peer_ = from;
             lastHelloNs_ = now;
+        } else if (n == ssize_t(sizeof kRecenter - 1) && std::memcmp(buf, kRecenter, n) == 0 &&
+                   now - lastRecenterNs_ > kRecenterGapNs) {
+            ALOGI("OneTrack asked for a recenter");
+            lastRecenterNs_ = now;
+            if (onRecenter) onRecenter();
         }
         // Keeps the page honest when no pictures are being checked at all.
         if (now - lastSendNs_ > kSecondNs && now - lastCheckNs_ > kSecondNs) {

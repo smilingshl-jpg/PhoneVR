@@ -15,6 +15,8 @@ import android.os.Build;
 import android.os.Build.VERSION;
 import android.os.Build.VERSION_CODES;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.util.DisplayMetrics;
 import android.util.Log;
@@ -44,6 +46,9 @@ public class ALVRActivity extends AppCompatActivity
     // Permission request codes
     private static final int PERMISSIONS_REQUEST_CODE = 2;
     private static final int CAMERA_REQUEST_CODE = 3;
+
+    // Time to put the headset on after pressing Recenter in the menu
+    private static final long RECENTER_DELAY_MS = 5000;
 
     private GLSurfaceView glView;
     private HandTracker hands;
@@ -291,7 +296,12 @@ public class ALVRActivity extends AppCompatActivity
 
     @Override
     public boolean onMenuItemClick(MenuItem item) {
-        if (item.getItemId() == R.id.switch_viewer) {
+        if (item.getItemId() == R.id.recenter) {
+            Toast.makeText(this, R.string.recenter_soon, Toast.LENGTH_LONG).show();
+            new Handler(Looper.getMainLooper())
+                    .postDelayed(this::recenterNative, RECENTER_DELAY_MS);
+            return true;
+        } else if (item.getItemId() == R.id.switch_viewer) {
             switchViewerNative();
             return true;
         } else if (item.getItemId() == R.id.switch_server) {
@@ -411,6 +421,8 @@ public class ALVRActivity extends AppCompatActivity
     private native void setSixDofNative(boolean enabled, int displayRotation);
 
     private native void setHandsNative(HandTracker tracker);
+
+    private native void recenterNative();
 
     private native void setPhoneModelNative(String model);
 }

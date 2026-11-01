@@ -3,6 +3,7 @@
 #include <GLES3/gl3.h>
 #include <algorithm>
 #include <android/log.h>
+#include <atomic>
 #include <deque>
 #include <jni.h>
 #include <map>
@@ -29,6 +30,8 @@ const float FLOOR_HEIGHT = 1.5;
 const int MAXIMUM_TRACKING_FRAMES = 360;
 // Reprojection aims each frame at the head rotation expected when it reaches the screen (~1 refresh ahead).
 const uint64_t REPROJECTION_PREDICTION_NS = 16e6;
+// Play area sent with a recenter, in metres. ALVR's own default size.
+const float PLAYSPACE_SIZE = 2.0;
 
 struct NativeContext {
     JavaVM *javaVm = nullptr;
@@ -78,6 +81,9 @@ struct NativeContext {
     // 6DoF fork: hands found in ARCore's pictures, sent to OneTrack
     HandSender hands;
     pvr6::Vec3 cameraToEyes = pvr6::FusionConfig{}.cameraToEyes;
+
+    // 6DoF fork: the next tracking send also makes this spot the game's centre
+    std::atomic<bool> recenterWanted{false};
 
     NativeContext() {
         memset(&fovArr, 0, (sizeof(fovArr)) / sizeof(int));
@@ -245,6 +251,12 @@ void inputThread() {
         alvr_send_tracking(
             targetTimestampNs, CTX.viewParams, &CTX.deviceMotion, 1, nullptr, nullptr);
 
+        // ALVR on the PC moves the centre to the head pose it just got, by its recentering settings.
+        if (CTX.recenterWanted.exchange(false)) {
+            alvr_send_playspace(PLAYSPACE_SIZE, PLAYSPACE_SIZE);
+            info("recenter sent to ALVR");
+        }
+
         deadline += std::chrono::nanoseconds((uint64_t) (1e9 / 60.f / 3));
         std::this_thread::sleep_until(deadline);
     }
@@ -284,6 +296,7 @@ extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_initia
 
     Cardboard_initializeAndroid(CTX.javaVm, CTX.javaContext);
     CTX.headTracker = CardboardHeadTracker_create();
+    CTX.hands.onRecenter = [] { CTX.recenterWanted = true; };
 }
 
 extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_destroyNative(JNIEnv *,
@@ -321,6 +334,7 @@ extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_resume
     CardboardQrCode_destroy(buffer);
 
     CTX.running = true;
+    CTX.hands.start();
 
     alvr_resume();
 }
@@ -333,6 +347,7 @@ extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_pauseN
         CTX.running = false;
     }
 
+    CTX.hands.stop();
     CTX.arcore.pause();   // also frees the camera (QR viewer scan, other apps)
     CardboardHeadTracker_pause(CTX.headTracker);
 }
@@ -567,6 +582,7 @@ extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_render
                 info("ALVR Poll Event: ALVR_EVENT_STREAMING_STARTED, opengl stream started and "
                      "input "
                      "Thread started...");
+                CTX.recenterWanted = false;   // a press from before this stream means nothing now
                 CTX.streaming = true;
                 CTX.inputThread = std::thread(inputThread);
 
@@ -698,10 +714,12 @@ extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_setPho
 extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_setHandsNative(
     JNIEnv *env, jobject, jobject tracker) {
     CTX.arcore.setHandTracker(env, tracker);
-    if (tracker)
-        CTX.hands.start();
-    else
-        CTX.hands.stop();
+    if (!tracker) CTX.hands.setProblem("");
+}
+
+extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_recenterNative(JNIEnv *,
+                                                                                         jobject) {
+    CTX.recenterWanted = true;
 }
 
 extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_HandTracker_resultNative(
