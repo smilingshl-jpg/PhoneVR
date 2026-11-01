@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "arcore_tracker.h"
+#include "hand_sender.h"
 #include "nlohmann/json.hpp"
 #include "pose_fusion.h"
 #include "pose_math.h"
@@ -73,6 +74,10 @@ struct NativeContext {
     bool sixDofEnabled = true;
     int displayRotation = 1;   // android.view.Surface rotation of the landscape screen
     int displayWidth = 0, displayHeight = 0;
+
+    // 6DoF fork: hands found in ARCore's pictures, sent to OneTrack
+    HandSender hands;
+    pvr6::Vec3 cameraToEyes = pvr6::FusionConfig{}.cameraToEyes;
 
     NativeContext() {
         memset(&fovArr, 0, (sizeof(fovArr)) / sizeof(int));
@@ -683,9 +688,42 @@ extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_setPho
     pvr6::FusionConfig cfg = CTX.fusion.config();
     cfg.cameraToEyes = pvr6::cameraOffsetFor(m);
     CTX.fusion.setConfig(cfg);
+    CTX.cameraToEyes = cfg.cameraToEyes;
     info("phone %s: camera to eyes %.3f %.3f %.3f", m, cfg.cameraToEyes.x, cfg.cameraToEyes.y,
          cfg.cameraToEyes.z);
     env->ReleaseStringUTFChars(model, m);
+}
+
+// `tracker` is the HandTracker that gets ARCore's pictures, or null to stop.
+extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_ALVRActivity_setHandsNative(
+    JNIEnv *env, jobject, jobject tracker) {
+    CTX.arcore.setHandTracker(env, tracker);
+    if (tracker)
+        CTX.hands.start();
+    else
+        CTX.hands.stop();
+}
+
+extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_HandTracker_resultNative(
+    JNIEnv *env, jobject, jlong timestampNs, jfloatArray values, jint count, jfloat msPerCheck) {
+    pvr6::HandPoint hands[2];
+    int found = 0;
+    pvr6::Lens lens = CTX.arcore.handLens();
+    jfloat *v = env->GetFloatArrayElements(values, nullptr);
+    for (int i = 0; i < count && i < 2; i++) {
+        if (pvr6::solveHand(v + i * pvr6::kHandValues, lens, CTX.displayRotation, CTX.cameraToEyes, &hands[found]))
+            found++;
+    }
+    env->ReleaseFloatArrayElements(values, v, JNI_ABORT);
+    CTX.arcore.handDone();
+    CTX.hands.report((GetBootTimeNano() - timestampNs) / 1e6f, msPerCheck, hands, found);
+}
+
+extern "C" JNIEXPORT void JNICALL Java_viritualisres_phonevr_HandTracker_problemNative(
+    JNIEnv *env, jobject, jstring problem) {
+    const char *p = env->GetStringUTFChars(problem, nullptr);
+    CTX.hands.setProblem(p);
+    env->ReleaseStringUTFChars(problem, p);
 }
 
 extern "C" JNIEXPORT void JNICALL

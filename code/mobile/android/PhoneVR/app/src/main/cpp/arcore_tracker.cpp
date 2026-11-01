@@ -20,6 +20,9 @@
 
 namespace {
 
+constexpr int64_t kHandEveryNs = 60000000LL;    // every second 30 fps picture, so about 15 checks a second
+constexpr int64_t kHandStuckNs = 1000000000LL;  // an answer this late isn't coming (app paused mid-check)
+
 int64_t bootTimeNs() {
     timespec t{};
     clock_gettime(CLOCK_BOOTTIME, &t);
@@ -266,6 +269,69 @@ void ArcoreTracker::findFloor(ArcoreSample &s) {
     }
 }
 
+void ArcoreTracker::setHandTracker(JNIEnv *env, jobject tracker) {
+    std::lock_guard<std::mutex> lock(handMutex_);
+    if (handTracker_) env->DeleteGlobalRef(handTracker_);
+    if (handBuffer_) env->DeleteGlobalRef(handBuffer_);
+    handTracker_ = handBuffer_ = nullptr;
+    handBusy_ = false;
+    if (!tracker) return;
+    handTracker_ = env->NewGlobalRef(tracker);
+    jclass cls = env->GetObjectClass(tracker);
+    handOnPicture_ = env->GetMethodID(cls, "onPicture", "(JIILjava/nio/ByteBuffer;)V");
+    env->DeleteLocalRef(cls);
+}
+
+void ArcoreTracker::offerHandPicture(JNIEnv *env, ArCamera_ *camera, int64_t timestampNs) {
+    std::lock_guard<std::mutex> lock(handMutex_);
+    int64_t since = timestampNs - lastHandNs_;
+    if (!handTracker_ || since < kHandEveryNs || (handBusy_.load() && since < kHandStuckNs)) return;
+
+    ArImage *image = nullptr;
+    if (ArFrame_acquireCameraImage(session_, frame_, &image) != AR_SUCCESS) return;   // none yet, try next frame
+    int32_t width = 0, height = 0, yStride = 0, uvStride = 0, uvPixelStride = 0, length = 0;
+    const uint8_t *y = nullptr, *u = nullptr, *v = nullptr;
+    ArImage_getWidth(session_, image, &width);
+    ArImage_getHeight(session_, image, &height);
+    ArImage_getPlaneRowStride(session_, image, 0, &yStride);
+    ArImage_getPlaneRowStride(session_, image, 1, &uvStride);
+    ArImage_getPlanePixelStride(session_, image, 1, &uvPixelStride);
+    ArImage_getPlaneData(session_, image, 0, &y, &length);
+    ArImage_getPlaneData(session_, image, 1, &u, &length);
+    ArImage_getPlaneData(session_, image, 2, &v, &length);
+
+    size_t bytes = size_t(width) * height * 4;
+    if (handPixels_.size() != bytes || !handBuffer_) {
+        handPixels_.resize(bytes);
+        if (handBuffer_) env->DeleteGlobalRef(handBuffer_);
+        jobject local = env->NewDirectByteBuffer(handPixels_.data(), jlong(bytes));
+        handBuffer_ = env->NewGlobalRef(local);
+        env->DeleteLocalRef(local);
+    }
+    pvr6::yuvToRgba(y, yStride, u, v, uvStride, uvPixelStride, width, height, handPixels_.data());
+    ArImage_release(image);
+
+    ArCameraIntrinsics *lens = nullptr;
+    ArCameraIntrinsics_create(session_, &lens);
+    ArCamera_getImageIntrinsics(session_, camera, lens);
+    pvr6::Lens seen;
+    ArCameraIntrinsics_getFocalLength(session_, lens, &seen.fx, &seen.fy);
+    ArCameraIntrinsics_getPrincipalPoint(session_, lens, &seen.cx, &seen.cy);
+    ArCameraIntrinsics_destroy(lens);
+    seen.width = width;
+    seen.height = height;
+    handLens_ = seen;
+
+    handBusy_ = true;
+    lastHandNs_ = timestampNs;
+    env->CallVoidMethod(handTracker_, handOnPicture_, jlong(timestampNs), jint(width), jint(height), handBuffer_);
+    if (env->ExceptionCheck()) {
+        env->ExceptionDescribe();
+        env->ExceptionClear();
+        handBusy_ = false;
+    }
+}
+
 void ArcoreTracker::loop(JavaVM *vm) {
     JNIEnv *env = nullptr;
     vm->AttachCurrentThread(&env, nullptr);   // ARCore calls back into Java internally
@@ -322,6 +388,7 @@ void ArcoreTracker::loop(JavaVM *vm) {
             ArCamera_getTrackingFailureReason(session_, camera, &reason);
             s.failureReason = reason;
         }
+        offerHandPicture(env, camera, ts);
         ArCamera_release(camera);
 
         if (s.tracking && planeFindingOn_ && ts - lastFloorCheckNs_ > 500000000LL) {

@@ -18,6 +18,7 @@ add_library(native-lib-alvr SHARED
     src/main/cpp/alvr_main.cpp
     src/main/cpp/reprojection.cpp
     src/main/cpp/arcore_tracker.cpp
+    src/main/cpp/hand_sender.cpp
     ${LIB_SRC}
 )
 

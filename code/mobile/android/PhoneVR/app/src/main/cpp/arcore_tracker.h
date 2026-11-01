@@ -11,8 +11,13 @@
 #include <mutex>
 #include <thread>
 
+#include <vector>
+
+#include "hand_geometry.h"
+
 struct ArSession_;
 struct ArFrame_;
+struct ArCamera_;
 
 struct ArcoreSample {
     int64_t timestampNs = 0;   // camera capture time, CLOCK_BOOTTIME (same clock ALVR uses)
@@ -37,11 +42,18 @@ class ArcoreTracker {
     ArcoreSample latest() const;
     bool running() const { return running_.load(); }
 
+    // The HandTracker Java object that gets camera pictures, or null for none.
+    void setHandTracker(JNIEnv *env, jobject tracker);
+    // The picture handed over last has been dealt with; the next one can go.
+    void handDone() { handBusy_ = false; }
+    pvr6::Lens handLens() const { return handLens_; }   // valid until handDone
+
   private:
     void loop(JavaVM *vm);
     void publish(const ArcoreSample &s);
     void findFloor(ArcoreSample &s);
     bool configure(bool planeFinding);
+    void offerHandPicture(JNIEnv *env, ArCamera_ *camera, int64_t timestampNs);
 
     ArSession_ *session_ = nullptr;
     ArFrame_ *frame_ = nullptr;
@@ -60,4 +72,14 @@ class ArcoreTracker {
     int64_t lastFloorCheckNs_ = 0;
     int floorSightings_ = 0;
     float floorCandidate_ = 0;
+
+    // pictures for the hand tracker
+    std::mutex handMutex_;
+    jobject handTracker_ = nullptr;
+    jobject handBuffer_ = nullptr;
+    jmethodID handOnPicture_ = nullptr;
+    std::vector<uint8_t> handPixels_;
+    std::atomic<bool> handBusy_{false};
+    int64_t lastHandNs_ = 0;
+    pvr6::Lens handLens_;
 };

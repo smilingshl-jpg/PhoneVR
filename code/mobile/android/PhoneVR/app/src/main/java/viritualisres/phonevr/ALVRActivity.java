@@ -46,6 +46,7 @@ public class ALVRActivity extends AppCompatActivity
     private static final int CAMERA_REQUEST_CODE = 3;
 
     private GLSurfaceView glView;
+    private HandTracker hands;
 
     private final BatteryMonitor bMonitor = new BatteryMonitor(this);
 
@@ -157,6 +158,7 @@ public class ALVRActivity extends AppCompatActivity
     protected void onPause() {
         super.onPause();
         Log.d(TAG, "Pausing ALVR Activity");
+        stopHands();
         pauseNative();
         glView.onPause();
         bMonitor.stopMonitoring(this);
@@ -185,6 +187,7 @@ public class ALVRActivity extends AppCompatActivity
 
         glView.onResume();
         resumeNative();
+        updateHands();
         bMonitor.startMonitoring(this);
     }
 
@@ -192,6 +195,30 @@ public class ALVRActivity extends AppCompatActivity
 
     private boolean isSixDofOn() {
         return getSharedPreferences("settings", MODE_PRIVATE).getBoolean("sixdof", true);
+    }
+
+    private boolean isHandsOn() {
+        // Off by default on the A8+ (2018): too slow to do this on top of the stream
+        boolean byDefault = !Build.MODEL.startsWith("SM-A730");
+        return getSharedPreferences("settings", MODE_PRIVATE).getBoolean("hands", byDefault);
+    }
+
+    // Hands use ARCore's pictures, so they need 6DoF and the camera.
+    private void updateHands() {
+        if (!isHandsOn() || !isSixDofOn() || !isCameraEnabled()) {
+            stopHands();
+        } else if (hands == null) {
+            hands = new HandTracker(this);
+            hands.start();
+            setHandsNative(hands);
+        }
+    }
+
+    private void stopHands() {
+        if (hands == null) return;
+        setHandsNative(null);
+        hands.stop();
+        hands = null;
     }
 
     private boolean isCameraEnabled() {
@@ -256,6 +283,7 @@ public class ALVRActivity extends AppCompatActivity
                 .findItem(R.id.reprojection_toggle)
                 .setChecked(prefs.getBoolean("reprojection", true));
         popup.getMenu().findItem(R.id.sixdof_toggle).setChecked(prefs.getBoolean("sixdof", true));
+        popup.getMenu().findItem(R.id.hands_toggle).setChecked(isHandsOn());
 
         popup.setOnMenuItemClickListener(this);
         popup.show();
@@ -302,6 +330,15 @@ public class ALVRActivity extends AppCompatActivity
                         this, new String[] {Manifest.permission.CAMERA}, CAMERA_REQUEST_CODE);
             }
             setSixDofNative(item.isChecked() && isCameraEnabled(), displayRotation());
+            updateHands();
+            return true;
+        } else if (item.getItemId() == R.id.hands_toggle) {
+            item.setChecked(!item.isChecked());
+            getSharedPreferences("settings", MODE_PRIVATE)
+                    .edit()
+                    .putBoolean("hands", item.isChecked())
+                    .apply();
+            updateHands();
             return true;
         }
         return false;
@@ -372,6 +409,8 @@ public class ALVRActivity extends AppCompatActivity
     private native void setReprojectionNative(boolean enabled);
 
     private native void setSixDofNative(boolean enabled, int displayRotation);
+
+    private native void setHandsNative(HandTracker tracker);
 
     private native void setPhoneModelNative(String model);
 }

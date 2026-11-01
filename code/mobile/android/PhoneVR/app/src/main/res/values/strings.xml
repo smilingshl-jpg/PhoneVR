@@ -44,5 +44,6 @@
     <string name="max_brightness">Max Brightness</string>
     <string name="reprojection">Reprojection (smoother)</string>
     <string name="sixdof">6DoF head tracking (ARCore)</string>
+    <string name="hand_tracking">Hand tracking (for OneTrack)</string>
     <string name="sixdof_needs_camera">6DoF head tracking needs the camera. Staying in 3DoF (look around only).</string>
 </resources>

@@ -18,4 +18,8 @@
         android:id="@+id/sixdof_toggle"
         android:title="@string/sixdof"
         android:checkable="true"/>
+    <item
+        android:id="@+id/hands_toggle"
+        android:title="@string/hand_tracking"
+        android:checkable="true"/>
 </menu>

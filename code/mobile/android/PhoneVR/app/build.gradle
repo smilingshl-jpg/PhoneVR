@@ -20,6 +20,11 @@ ext.arcoreVersion = "1.57.0"
 def arcoreDir = "${buildDir}/arcore-native"
 configurations { arcoreNatives }
 
+// 6DoF fork: Google's hand model, fetched at build time like the ARCore header and checked against this hash.
+def handModelDir = "${buildDir}/hand-model"
+def handModelUrl = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+def handModelSha256 = "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1"
+
 android {
     signingConfigs {
         releaseconfig {
@@ -104,9 +109,13 @@ android {
             versionNameSuffix "-nogvr"
         }
     }
+    androidResources {
+        noCompress 'task'   // MediaPipe maps the model straight from the APK
+    }
     sourceSets {
         main {
             jniLibs.srcDirs = ["libraries/jni", "../ALVR/build/alvr_client_core"]
+            assets.srcDirs += [handModelDir]
         }
         gvr {
             jniLibs.srcDirs = ["libraries/jni", "libraries_gvr/jni", "../ALVR/build/alvr_client_core"]
@@ -184,6 +193,8 @@ dependencies {
     // 6DoF fork: ARCore (Java part for the install prompt + native libarcore_sdk_c.so)
     implementation "com.google.ar:core:$arcoreVersion"
     arcoreNatives "com.google.ar:core:$arcoreVersion"
+    // 6DoF fork: hand model runner
+    implementation 'com.google.mediapipe:tasks-vision:0.10.35'
 
     def acraVersion = '5.7.0'
     implementation "ch.acra:acra-mail:$acraVersion"
@@ -228,6 +239,22 @@ task extractArcore {
         }
     }
 }
+task fetchHandModel {
+    def model = file("${handModelDir}/hand_landmarker.task")
+    outputs.file(model)
+    doLast {
+        model.parentFile.mkdirs()
+        new URL(handModelUrl).withInputStream { i -> model.withOutputStream { it << i } }
+        def digest = java.security.MessageDigest.getInstance("SHA-256").digest(model.bytes)
+        def got = digest.collect { String.format("%02x", it) }.join()
+        if (got != handModelSha256) {
+            model.delete()
+            throw new GradleException("Hand model checksum is $got, expected $handModelSha256")
+        }
+    }
+}
+preBuild.dependsOn(fetchHandModel)
+
 tasks.whenTaskAdded { task ->
     if ((task.name.contains("external") || task.name.contains("CMake")) && !task.name.contains("Clean")) {
         task.dependsOn(extractArcore)
